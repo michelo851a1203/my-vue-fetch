@@ -1,5 +1,9 @@
+import * as zod from "zod";
 import { MaybeRef, toValue } from "vue";
-import { BeforeFetchContext, createFetch } from "@vueuse/core";
+import { AfterFetchContext, BeforeFetchContext, createFetch } from "@vueuse/core";
+
+export type RequestInput = string | number | boolean;
+export type RequestInputs = RequestInput | RequestInput[];
 
 export interface UseCustomFetchOptions {
   /**
@@ -12,17 +16,33 @@ export interface UseCustomFetchOptions {
    * query : Query parameters to be added to the request
    * @default {}
    */
-  query?: MaybeRef<Record<string, any>>;
+  query?: MaybeRef<Record<string, RequestInputs>>;
 
   /**
    * json: JSON data to be sent with the request
    * @default {}
    */
-  json?: MaybeRef<Record<string, any>>;
+  json?: MaybeRef<Record<string, RequestInputs>>;
+
+  /**
+   * responseSchema: trigger when get status code 2xx
+   * @default undefined
+   */
+  responseSchema?: zod.ZodTypeAny;
+
+  /**
+   * errorResponseSchema : only trigger when get status code 4xx or 5xx
+   * @default undefined
+   */
+  errorResponseSchema?: zod.ZodTypeAny;
 }
 
 export type UseCustomFetchOptionsKey = UseCustomFetchOptions[keyof UseCustomFetchOptions];
 
+/**
+ * useCustomFetch.ts
+ * @author Michael Ho <michael.h.@nexusplay.tw>
+ */
 export const useCustomFetch = () => {
   const useApi = (options: UseCustomFetchOptions) =>
     createFetch({
@@ -30,10 +50,13 @@ export const useCustomFetch = () => {
       options: {
         timeout: 30000,
         immediate: false,
-        beforeFetch: getBeforeFetch(options)
+        beforeFetch: getBeforeFetch(options),
+        afterFetch: getAfterFetch(options)
       }
     });
 
+  // ===================================================
+  // beforeFetch functions
   /**
    * getBeforeFetch: A function to curry the beforeFetch functions
    *
@@ -41,22 +64,22 @@ export const useCustomFetch = () => {
    * @returns (ctx: BeforeFetchContext) => BeforeFetchContext
    */
   const getBeforeFetch = (options: UseCustomFetchOptions): ((ctx: BeforeFetchContext) => BeforeFetchContext) => {
-    const { isBearerTokenRequired, query } = options;
+    const { isBearerTokenRequired, query, json } = options;
     return (ctx: BeforeFetchContext) =>
-      fetchCurryFn(ctx, [getAuthorizationBeforeFetch(isBearerTokenRequired), getQueryBeforeFetch(query)]);
+      fetchCurryFn<BeforeFetchContext>(ctx, [
+        getAuthorizationBeforeFetch(isBearerTokenRequired),
+        getQueryBeforeFetch(query),
+        getJsonFormatBeforeFetch(json)
+      ]);
   };
 
   /**
-   * fetchCurryFn: A function to curry the beforeFetch functions
-   * @param ctx: BeforeFetchContext
-   * @param fnList: Array of beforeFetch functions
+   * curry: A function to curry
+   * @param input: T any type
+   * @param fnList: Array of beforeFetch/afterFetch functions
    */
-  const fetchCurryFn = (
-    ctx: BeforeFetchContext,
-    fnList: ((ctx: BeforeFetchContext) => BeforeFetchContext)[]
-  ): BeforeFetchContext => {
-    return fnList.reduce((acc, fn) => fn(acc), ctx);
-  };
+  const fetchCurryFn = <T extends BeforeFetchContext | AfterFetchContext>(ctx: T, fnList: ((ctx: T) => T)[]): T =>
+    fnList.reduce((acc, fn) => fn(acc), ctx);
 
   /**
    * getAuthorization: Add token to the request header
@@ -67,7 +90,7 @@ export const useCustomFetch = () => {
   const getAuthorizationBeforeFetch = (
     isBearerTokenRequired: boolean = false
   ): ((ctx: BeforeFetchContext) => BeforeFetchContext) => {
-    if (!isBearerTokenRequired) return noActionContext;
+    if (!isBearerTokenRequired) return noActionContext<BeforeFetchContext>;
     return (ctx: BeforeFetchContext) => {
       // ... get token from authStore in pinia or localStorage
       const token = "<token>";
@@ -88,12 +111,15 @@ export const useCustomFetch = () => {
   /**
    * getQueryBeforeFetch: Add query parameters to the request
    *
-   * @param query: MaybeRef<Record<string, any>>
+   * @param query: MaybeRef<Record<string, T | T[]>>
    * @returns (ctx: BeforeFetchContext) => BeforeFetchContext
    */
-  const getQueryBeforeFetch = (query?: MaybeRef<Record<string, any>>): ((ctx: BeforeFetchContext) => BeforeFetchContext) => {
+  const getQueryBeforeFetch = <T extends string | number | boolean>(
+    query?: MaybeRef<Record<string, T | T[]>>
+  ): ((ctx: BeforeFetchContext) => BeforeFetchContext) => {
     const currentQuery = toValue(query);
-    if (!currentQuery) return noActionContext;
+    if (!currentQuery) return noActionContext<BeforeFetchContext>;
+    if (Object.keys(currentQuery).length === 0) return noActionContext<BeforeFetchContext>;
     return (ctx: BeforeFetchContext): BeforeFetchContext => {
       ctx.url += generateQueryString(currentQuery);
       return ctx;
@@ -103,10 +129,10 @@ export const useCustomFetch = () => {
   /**
    * generateQueryString: Generate the query string from the query data
    *
-   * @param queryData: Record<string, any>
+   * @param queryData: Record<string, T | T[]>
    * @returns string
    */
-  const generateQueryString = (queryData: Record<string, any>) => {
+  const generateQueryString = <T extends string | number | boolean>(queryData: Record<string, T | T[]>): string => {
     const query = new URLSearchParams();
 
     for (const [key, value] of Object.entries(queryData)) {
@@ -124,11 +150,86 @@ export const useCustomFetch = () => {
   };
 
   /**
-   * noActionContext: A function to return the context as it is
+   * getJsonFormatBeforeFetch: Format the JSON data to be sent with the request
    *
-   * @param ctx: BeforeFetchContext
+   * @param MaybeRef<Record<string, T | T[]>> jsonInput
+   * @returns ((ctx: BeforeFetchContext) => BeforeFetchContext) => {
    */
-  const noActionContext = (ctx: BeforeFetchContext): BeforeFetchContext => ctx;
+  const getJsonFormatBeforeFetch = <T extends string | number | boolean>(
+    jsonInput?: MaybeRef<Record<string, T | T[]>>
+  ): ((ctx: BeforeFetchContext) => BeforeFetchContext) => {
+    const currentRawData = toValue(jsonInput);
+    if (!currentRawData) return noActionContext<BeforeFetchContext>;
+    return (ctx: BeforeFetchContext): BeforeFetchContext => {
+      ctx.options.headers = {
+        ...ctx.options.headers,
+        "Content-Type": "application/json"
+      };
+      ctx.options.body = JSON.stringify(removeNullishInObject(currentRawData));
+      return ctx;
+    };
+  };
+
+  /**
+   * function removeNullishInObject: Remove undefined, null, empty string in object
+   *
+   * @param obj
+   */
+  const removeNullishInObject = <T>(obj: Record<string, T>) =>
+    Object.fromEntries(Object.entries(obj).filter(([_, v]) => v !== "" && v !== undefined && v !== null));
+
+  // ===================================================
+
+  const getAfterFetch = (options: UseCustomFetchOptions): ((ctx: AfterFetchContext) => AfterFetchContext) => {
+    const { responseSchema, errorResponseSchema } = options;
+    return (ctx: AfterFetchContext) =>
+      fetchCurryFn<AfterFetchContext>(ctx, [
+        responseSchemaAfterFetch(responseSchema),
+        errorSchemaAfterFetch(errorResponseSchema)
+      ]);
+  };
+
+  const errorSchemaAfterFetch = (errorResponseSchema?: zod.ZodTypeAny): ((ctx: AfterFetchContext) => AfterFetchContext) => {
+    if (!errorResponseSchema) return noActionContext<AfterFetchContext>;
+    return (ctx: AfterFetchContext) => {
+      if (ctx.response.ok) return ctx;
+      const validatedError = errorResponseSchema.safeParse(ctx.data);
+      if (!validatedError.success) {
+        if (import.meta.env.MODE !== "production") {
+          console.group("%c [api error] type error", "color: yellow;");
+          console.log(validatedError.error);
+          console.groupEnd();
+        }
+        throw new TypeError(validatedError.error.message);
+      }
+      return ctx;
+    };
+  };
+
+  const responseSchemaAfterFetch = (responseSchema?: zod.ZodTypeAny): ((ctx: AfterFetchContext) => AfterFetchContext) => {
+    if (!responseSchema) return noActionContext<AfterFetchContext>;
+    return (ctx: AfterFetchContext) => {
+      if (!ctx.response.ok) return ctx;
+      const validatedResponse = responseSchema.safeParse(ctx.data);
+      if (!validatedResponse.success) {
+        if (import.meta.env.MODE !== "production") {
+          console.group("%c [api response] type error", "color: yellow;");
+          console.log(validatedResponse.error);
+          console.groupEnd();
+        }
+        throw new TypeError(validatedResponse.error.message);
+      }
+      return ctx;
+    };
+  };
+
+  /**
+   * noActionContext: A function to return the context without any action
+   *
+   * @param T ctx
+   * @returns T ctx
+   */
+  const noActionContext = <T extends BeforeFetchContext | AfterFetchContext>(ctx: T): T => ctx;
 
   return {
     useApi

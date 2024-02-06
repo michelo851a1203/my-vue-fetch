@@ -13,7 +13,8 @@
     "@typescript-eslint/parser": "^6.20.0",
     "@vueuse/core": "^10.7.2",
     "json-server": "^1.0.0-alpha.23",
-    "vue": "^3.3.4"
+    "vue": "^3.3.4",
+    "zod": "^3.22.4"
   },
   "devDependencies": {
     "@types/node": "^20.11.16",
