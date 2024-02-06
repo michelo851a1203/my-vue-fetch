@@ -65,6 +65,9 @@ export const useCustomFetch = () => {
         beforeFetch: getBeforeFetch(options),
         afterFetch: getAfterFetch(options),
         onFetchError: getOnFetchError(options)
+      },
+      fetchOptions: {
+        mode: "cors"
       }
     });
 
