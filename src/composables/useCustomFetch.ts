@@ -195,6 +195,12 @@ export const useCustomFetch = () => {
 
   // ===================================================
 
+  /**
+   * getAfterFetch : A function to curry the afterFetch functions
+   *
+   * @param UseCustomFetchOptions options
+   * @returns (ctx: AfterFetchContext) => AfterFetchContext
+   */
   const getAfterFetch = (options: UseCustomFetchOptions): ((ctx: AfterFetchContext) => AfterFetchContext) => {
     const { responseSchema, errorResponseSchema } = options;
     return (ctx: AfterFetchContext) =>
@@ -204,6 +210,12 @@ export const useCustomFetch = () => {
       ]);
   };
 
+  /**
+   * errorSchemaAfterFetch : if response.ok is false, validate the error response schema
+   *
+   * @param zod.ZodTypeAny errorResponseSchema
+   * @returns (ctx: AfterFetchContext) => AfterFetchContext
+   */
   const errorSchemaAfterFetch = (errorResponseSchema?: zod.ZodTypeAny): ((ctx: AfterFetchContext) => AfterFetchContext) => {
     if (!errorResponseSchema) return noActionContext<AfterFetchContext>;
     return (ctx: AfterFetchContext) => {
@@ -221,6 +233,12 @@ export const useCustomFetch = () => {
     };
   };
 
+  /**
+   * responseSchemaAfterFetch : if response.ok is true, validate the response schema
+   *
+   * @param zod.ZodTypeAny responseSchema
+   * @returns (ctx: AfterFetchContext) => AfterFetchContext
+   */
   const responseSchemaAfterFetch = (responseSchema?: zod.ZodTypeAny): ((ctx: AfterFetchContext) => AfterFetchContext) => {
     if (!responseSchema) return noActionContext<AfterFetchContext>;
     return (ctx: AfterFetchContext) => {
