@@ -1,9 +1,21 @@
 import * as zod from "zod";
 import { MaybeRef, toValue } from "vue";
-import { AfterFetchContext, BeforeFetchContext, createFetch } from "@vueuse/core";
+import { AfterFetchContext, BeforeFetchContext, OnFetchErrorContext, createFetch } from "@vueuse/core";
 
 export type RequestInput = string | number | boolean;
 export type RequestInputs = RequestInput | RequestInput[];
+
+export enum ApiErrorStatus {
+  TYPE_ERROR = "TYPE_ERROR",
+  SERVER_ERROR = "SERVER_ERROR",
+  ABORT_ERROR = "ABORT_ERROR"
+}
+
+export interface CustomFetchErrorCtx {
+  data: any;
+  response: Response | null;
+  error: ApiErrorStatus;
+}
 
 export interface UseCustomFetchOptions {
   /**
@@ -51,7 +63,8 @@ export const useCustomFetch = () => {
         timeout: 30000,
         immediate: false,
         beforeFetch: getBeforeFetch(options),
-        afterFetch: getAfterFetch(options)
+        afterFetch: getAfterFetch(options),
+        onFetchError: getOnFetchError(options)
       }
     });
 
@@ -78,8 +91,10 @@ export const useCustomFetch = () => {
    * @param input: T any type
    * @param fnList: Array of beforeFetch/afterFetch functions
    */
-  const fetchCurryFn = <T extends BeforeFetchContext | AfterFetchContext>(ctx: T, fnList: ((ctx: T) => T)[]): T =>
-    fnList.reduce((acc, fn) => fn(acc), ctx);
+  const fetchCurryFn = <T extends BeforeFetchContext | AfterFetchContext | CustomFetchErrorCtx>(
+    ctx: T,
+    fnList: ((ctx: T) => T)[]
+  ): T => fnList.reduce((acc, fn) => fn(acc), ctx);
 
   /**
    * getAuthorization: Add token to the request header
@@ -200,7 +215,7 @@ export const useCustomFetch = () => {
           console.log(validatedError.error);
           console.groupEnd();
         }
-        throw new TypeError(validatedError.error.message);
+        throw new TypeError(ApiErrorStatus.TYPE_ERROR);
       }
       return ctx;
     };
@@ -217,7 +232,97 @@ export const useCustomFetch = () => {
           console.log(validatedResponse.error);
           console.groupEnd();
         }
-        throw new TypeError(validatedResponse.error.message);
+        throw new TypeError(ApiErrorStatus.TYPE_ERROR);
+      }
+      return ctx;
+    };
+  };
+
+  // ===================================================
+
+  /**
+   * getOnFetchError : A function to curry the onFetchError functions
+   *
+   * @param UseCustomFetchOptions options
+   * @returns (ctx: CustomFetchErrorCtx) => Promise<Partial<OnFetchErrorContext>> | Partial<OnFetchErrorContext>
+   */
+  const getOnFetchError = (
+    options: UseCustomFetchOptions
+  ): ((ctx: CustomFetchErrorCtx) => Promise<Partial<OnFetchErrorContext>> | Partial<OnFetchErrorContext>) => {
+    const { errorResponseSchema } = options;
+    return (ctx: CustomFetchErrorCtx) =>
+      fetchCurryFn<CustomFetchErrorCtx>(ctx, [
+        typeErrorOnFetchError(),
+        timeOutErrorOnFetchError(),
+        responseNullOnFetchError(),
+        errorSchemaOnFetchError(errorResponseSchema)
+      ]);
+  };
+
+  /**
+   * typeErrorOnFetchError : type error not the same as responseSchema
+   *
+   * @returns (ctx: CustomFetchErrorCtx) => CustomFetchErrorCtx
+   */
+  const typeErrorOnFetchError = (): ((ctx: CustomFetchErrorCtx) => CustomFetchErrorCtx) => {
+    return (ctx: CustomFetchErrorCtx) => {
+      if (ctx.error === ApiErrorStatus.TYPE_ERROR) {
+        // type error do something
+        return ctx;
+      }
+      return ctx;
+    };
+  };
+
+  /**
+   * timeOutErrorOnFetchError : timeout error (call: abortController)
+   *
+   * @returns (ctx: CustomFetchErrorCtx) => CustomFetchErrorCtx
+   */
+  const timeOutErrorOnFetchError = (): ((ctx: CustomFetchErrorCtx) => CustomFetchErrorCtx) => {
+    return (ctx: CustomFetchErrorCtx) => {
+      if (ctx.error === ApiErrorStatus.ABORT_ERROR) {
+        // type error do something
+        return ctx;
+      }
+      return ctx;
+    };
+  };
+
+  /**
+   * responseNullOnFetchError : response null mean 500
+   *
+   * @returns (ctx: CustomFetchErrorCtx) => CustomFetchErrorCtx
+   */
+  const responseNullOnFetchError = (): ((ctx: CustomFetchErrorCtx) => CustomFetchErrorCtx) => {
+    return (ctx: CustomFetchErrorCtx) => {
+      // response is null mean 500
+      if (ctx.response === null) {
+        // type error do something
+        return ctx;
+      }
+      return ctx;
+    };
+  };
+
+  /**
+   * errorSchemaOnFetchError : A function to validate the error response schema
+   *
+   * @param zod.ZodTypeAny errorResponseSchema
+   * @returns (ctx: CustomFetchErrorCtx) => CustomFetchErrorCtx
+   */
+  const errorSchemaOnFetchError = (errorResponseSchema?: zod.ZodTypeAny): ((ctx: CustomFetchErrorCtx) => CustomFetchErrorCtx) => {
+    if (!errorResponseSchema) return noActionContext<CustomFetchErrorCtx>;
+    return (ctx: CustomFetchErrorCtx) => {
+      const responseData = typeof ctx.data === "string" ? JSON.parse(ctx.data) : ctx.data;
+      const validatedError = errorResponseSchema.safeParse(responseData);
+      if (!validatedError.success) {
+        if (import.meta.env.MODE !== "production") {
+          console.group("%c [api error] type error", "color: yellow;");
+          console.log(validatedError.error);
+          console.groupEnd();
+        }
+        // show error message or do something (unknown error)
       }
       return ctx;
     };
@@ -229,7 +334,7 @@ export const useCustomFetch = () => {
    * @param T ctx
    * @returns T ctx
    */
-  const noActionContext = <T extends BeforeFetchContext | AfterFetchContext>(ctx: T): T => ctx;
+  const noActionContext = <T extends BeforeFetchContext | AfterFetchContext | CustomFetchErrorCtx>(ctx: T): T => ctx;
 
   return {
     useApi
